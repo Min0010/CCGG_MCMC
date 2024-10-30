@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[15]:
+# In[1]:
+
+
+get_ipython().system('conda info --envs')
+
+
+# In[2]:
 
 
 import numpy as np
@@ -134,14 +140,14 @@ class AXIS:
     
     def __init__(self, x_iv):
         self.AXI = []
+        self.niv = len(x_iv)    #no. of intervals
         #Input of xs,xe,n_sample per interval----------
         n = 0
-        for i in range(len(x_iv)):
+        for i in range(self.niv):
             self.AXI.append(AXIS_interval(x_iv[i]))
             self.AXI[i].ms = n
             n += self.AXI[i].m-1
             self.AXI[i].me = n
-        self.niv = len(self.AXI)    #no. of intervals
         self.m = 0
         for i in range(self.niv):
             self.m += self.AXI[i].m
@@ -204,7 +210,8 @@ class FLEQ:
         self.s1     = 0
         self.Sg1    = 0
         self.H0     = 0
-        self.switch = 0
+        self.fl_ks  = 0 #flag controlling the integration of the ODE sytem
+        self.fl_sw  = 0 #flag controlling the integration of the ODE sytem
 
     
     def set_prm(self, *args):
@@ -227,37 +234,21 @@ class FLEQ:
         ds1       = 2*np.sqrt(ds1)-s1
         self.Sg1  = ds1/s1
         return
-
-    
-    def print_parameters(self):
-        print('\n --- Cosmological parameters ---------------------')
-        print(' Ω_m                  = %11.3e  []'%self.Om)
-        print(' Ω_r                  = %11.3e  []'%self.Orad)
-        print(' Ω_Λ                  = %11.3e  []'%self.Ol)
-        print(' Ω_K                  = %11.3e  []'%self.Ok)
-        print(' h                    = %11.3e  []'%self.h)
-        print(' Ω_s                  = %11.3e  []'%self.Os)
-        print(' Ω_g                  = %11.3e  []'%self.Og)
-        print(' s(τ=1)               = %11.3e  []'%self.s1)
-        print(' Σ(τ=1)               = %11.3e  []'%self.Sg1)
-        print(' -------------------------------------------------')
-        return
     
     
     #GR system of equations    
     def FL_equations_GR(self, x, y):
-        yp   = self.yp
-
-        z    = y[0]
-        H    = y[1]
-        if z < 0 or z > self.mv:
-            return yp, 1
+        yp = self.yp
+        z  = y[0]
+        H  = y[1]
         
         z1 = z+1
+        if z < 0 or 1/z1 < 0 or z > self.mv:
+            return yp, 1
+        
         z2 = z1**2
         z3 = z1**3
         H2 = H**2
-        M  = 0.25*self.Om*z3+self.Ol
         yp[0] = -z1*H
         yp[1] = -2*H2+0.5*self.Om*z3+2*self.Ol+self.Ok*z2
         return yp, 0
@@ -269,18 +260,19 @@ class FLEQ:
         Orad = self.Orad
         Ol   = self.Ol
         Ok   = self.Ok
-        Os   = self.Os
         Og   = self.Og
+        Os   = self.Os
         Os2  = Os/2
         yp   = self.yp
         mv   = self.mv
-        switch = self.switch
+        flks = self.fl_ks
+        flsw = self.fl_sw
       
         z  = y[0]
         H  = y[1]
         s  = y[2]
         w  = y[3]
-        if z < 0 or z > mv or abs(H) > mv or abs(s) > mv:
+        if z < 0 or z > 1/self.prc or abs(H) > mv or abs(s) > mv:
             return yp, 1
         
         z1 = z+1
@@ -291,22 +283,30 @@ class FLEQ:
         M  = 0.25*Om*z3+Ol
         yp[0] = -z1*H
         yp[1] = -2*H2+2*M+Ok*z2-(Os-1)*s2
-        if switch == 0:
-            V0 = -Om*z1-Orad*z2-Ol/z2
-            ks = (H2*s2-M*(0.75*Om*z3+Orad*z1**4)
-                  +Os2*s2*(H2+(Os2-1)*s2-Ok*z2)
-                  +(Og-M)*(H2+V0*z2-Ok*z2+(Os-1)*s2))
-            if ks > self.prc:
-                yp[2] = -H*s+self.eps*2*np.sqrt(ks)
-            else: 
-                yp[2] = w*s
-                switch == 1
+
+        V0 = -Om*z1-Orad*z2-Ol/z2
+        ks = (H2*s2-M*(0.75*Om*z3+Orad*z1**4)
+              +Os2*s2*(H2+(Os2-1)*s2-Ok*z2)
+              +(Og-M)*(H2+V0*z2-Ok*z2+(Os-1)*s2))
+        if ks > self.prc:
+            yp[2] = -H*s+self.eps*2*np.sqrt(ks)
+            flks  = 0
+        else: 
+            if flsw != 0: return yp, 2
+            yp[2] = w*s
+            flks  = 1
         s2Hw = s2*(H+w)
         if abs(s2Hw) > self.prc and abs(w) < mv:
             E = 1.5*Om*H*z3-s2*(5*H-(2*Os-1)*w)
             E *= (H2-Ok*z2-2*M+(Os-1)*s2)/s2Hw
-            yp[3] = -w**2-2*s2+5*H2-3*H*w+4*Og*(Os-1)-2*Ok*z2+E         
-        elif switch == 1: return yp, 2
+            yp[3] = -w**2-2*s2+5*H2-3*H*w+4*Og*(Os-1)-2*Ok*z2+E
+            flsw  = 0
+        else:            
+            if flks != 0: return yp, 3
+            flsw = 1
+        
+        self.fl_ks = flks
+        self.fl_sw = flsw
         return yp, 0
 
 
@@ -368,14 +368,44 @@ class FLEQ:
         # Validity range of solution
         self.imin = m-1
         for i in range(m-2,imin-1,-1):
-            if y[0,i] > 0 and y[0,i] < self.mv:
+            if y[0,i] > 0 and (1/(y[0,i]+1)) > self.prc and y[0,i] < self.mv:
                 self.imin = i
             else: break
-        print(y[0,self.imin:self.imin+3])
-        print(1/(y[0,self.imin:self.imin+3]+1))
 
         # reset for next run
-        self.switch = 0
+        self.fl_ks = 0
+        self.fl_sw = 0
+        return
+
+    
+    def print_parameters(self):
+        print('\n --- Cosmological parameters ---------------------')
+        print(' Ω_m                  = %11.3e  []'%self.Om)
+        print(' Ω_r                  = %11.3e  []'%self.Orad)
+        print(' Ω_Λ                  = %11.3e  []'%self.Ol)
+        print(' Ω_K                  = %11.3e  []'%self.Ok)
+        print(' h                    = %11.3e  []'%self.h)
+        print(' Ω_s                  = %11.3e  []'%self.Os)
+        print(' Ω_g                  = %11.3e  []'%self.Og)
+        print(' s(τ=1)               = %11.3e  []'%self.s1)
+        print(' Σ(τ=1)               = %11.3e  []'%self.Sg1)
+        print(' -------------------------------------------------')
+        return
+    
+
+    def print_solution(self):
+        print('\n --- Solution of FL eq. --------------------------')
+        print(' τ_min                = %11.3e  []'%self.AX.x[self.imin])
+        print(' τ_max                = %11.3e  []'%self.AX.x[-1])
+        print(' a(τ=τ_min)           = %11.3e  []'%(1/(self.y[0,self.imin]+1)))
+        print(' a(τ=τ_max)           = %11.3e  []'%(1/(self.y[0,-1]+1)))
+        print(' z(τ=τ_min)           = %11.3e  []'%self.y[0,self.imin])
+        print(' z(τ=τ_max)           = %11.3e  []'%self.y[0,-1])
+        print(' H(τ=τ_min)           = %11.3e  []'%self.y[1,self.imin])
+        print(' H(τ=τ_max)           = %11.3e  []'%self.y[1,-1])
+        print(' s(τ=τ_min)           = %11.3e  []'%self.y[2,self.imin])
+        print(' s(τ=τ_max)           = %11.3e  []'%self.y[2,-1])
+        print(' -------------------------------------------------')
         return
 
     
@@ -432,6 +462,8 @@ class MDLS:
         self.rs      = 0
         self.R       = 0
         self.la      = 0
+        self.HBBN_GR = 0
+        self.HBBN_CG = 0
     
 
     # distance modulus
@@ -441,6 +473,7 @@ class MDLS:
         zh  = self.zh
         Hh  = self.Hh
         muh = self.muh
+        H02 = 0.5/self.FL.H0
 
         for i in range(m):
             zh[i] = FL.y[0,m-1-i]
@@ -448,7 +481,7 @@ class MDLS:
 
         # Identify domain where z grows strictly monotonely
         self.izmin = 0
-        izmax = m-FL.imin
+        izmax = m-FL.imin+1
         self.izmax = izmax
         for i in range(1,izmax):
             if zh[i] < zh[i-1]:
@@ -457,11 +490,10 @@ class MDLS:
              
         muh[self.izmin] = 0
         for i in range(self.izmin+1,self.izmax):
-            muh[i] = muh[i-1]+0.5*(zh[i]-zh[i-1])*(1/Hh[i]+1/Hh[i-1])/self.FL.H0
+            muh[i] = muh[i-1]+H02*(zh[i]-zh[i-1])*(1/Hh[i]+1/Hh[i-1])
         for i in range(self.izmin+1,self.izmax):
             muh[i] = 5*np.log10((1+zh[i])*muh[i]/1.5637382e38)+25
             
-        #self.izmin += 1
         self.z  = zh[self.izmin:self.izmax]
         self.Hz = Hh[self.izmin:self.izmax]
         self.mu = muh[self.izmin:self.izmax]
@@ -503,19 +535,19 @@ class MDLS:
             dz2 = H02*(z[i]-z[i-1])
             rcd[i] = rcd[i-1]+dz2*(1/Hz[i]+1/Hz[i-1])
             if ntr == 0 and z[i] > ztr: ntr = i-1
-        if ntr == 0: return 0,0,1
+        if ntr == 0: return
         self.rtr = rcd[ntr]+(ztr-z[ntr])*(rcd[ntr+1]-rcd[ntr])/(z[ntr+1]-z[ntr])
+        #self.rtr = rcd[ntr]+(ztr-z[ntr])*(rcd[ntr]-rcd[ntr-1])/(z[ntr]-z[ntr-1])
         #self.rtr = quad_interpol(z[ntr-1:ntr+2], rcd[ntr-1:ntr+2], ztr)
-        print(" ntr,z[ntr-1:ntr+2],ztr: ",ntr,z[ntr-1:ntr+2],ztr)
-        print(" rcd[ntr-1:ntr+2],rtrq,rtrl: ",rcd[ntr-1:ntr+2],self.rtr)
+        #print(" ntr,z[ntr-1:ntr+2],ztr: ",ntr,z[ntr-1:ntr+2],ztr)
+        #print(" rcd[ntr-1:ntr+2],rtrq,rtrl: ",rcd[ntr-1:ntr+2],self.rtr)
         
         # sound horizon rs
         self.rs  = 0
         igr0 = 1/(np.sqrt(1+660/(1+z[ntr]))*Hz[ntr])
         for i in range(ntr+1,mz):
-            dz2 = (z[i]-z[i-1])/2
             igr = 1/(np.sqrt(1+660/(1+z[i]))*Hz[i])
-            self.rs += dz2*(igr+igr0)
+            self.rs += 0.5*(z[i]-z[i-1])*(igr+igr0)
             igr0 = igr
         self.rs /= (H0*np.sqrt(3))
     
@@ -523,10 +555,32 @@ class MDLS:
         skr    = self.S_k(Ok, self.rtr)
         self.R = np.sqrt(Om)*H0*skr
         if abs(self.rs) < self.FL.prc: self.la = 0
-        else: self.la = np.pi*skr/self.rs      
+        else: self.la = np.pi*skr/self.rs
+        #print(skr,self.rs)
         return
 
-  
+    
+    def calc_HBBN(self):
+        FL   = self.FL
+        Om   = FL.Om
+        Orad = FL.Orad
+        Ol   = FL.Ol
+        Ok   = FL.Ok
+        z    = self.z
+        Hz   = self.Hz
+        
+        zB   = 1.e9
+        self.HBBN_GR = np.sqrt(Om*zB**3+Orad*zB**4+Ol+Ok*zB**2)
+        if FL.GR == 'n':
+            for j in range(self.mz):
+                if z[j] > zB: break
+            i = j-1 if j == self.mz-1 else j
+            if Hz[i+1] > Hz[i]:
+                self.HBBN_CG = Hz[i]+(Hz[i+1]-Hz[i])*(zB-z[i])/(z[i+1]-z[i])
+                #self.HBBN_CG = quad_interpol(z[i-1:i+2], Hz[i-1:i+2], zB)
+        return
+    
+
     def print_results(self):
         RPl  = 1.7661
         laPl = 301.7293
@@ -537,6 +591,8 @@ class MDLS:
         print(' r(transparency)      = %11.3e  []'%self.rtr)
         print(' H(zmin)              = %11.3e  []'%self.Hz[0])
         print(' H(zmax)              = %11.3e  []'%self.Hz[-1])
+        print(' H_GR(z=10^9)         = %11.3e  []'%self.HBBN_GR)
+        print(' H_CG(z=10^9)         = %11.3e  []'%self.HBBN_CG)
         print(' r_sound              = %11.3e  []'%self.rs)
         print(' R                    = %11.3e  []'%self.R)
         print(' R(Planck)            = %11.3e  []'%RPl)
@@ -580,10 +636,7 @@ class MDLS:
         return
 
     
-    def draw_mu(self, xmin, xmax, ymin, ymax, SNe_redshift, SNe_distmod, SNe_distmod_unc):
-        redshift = SNe_redshift
-        distmod = SNe_distmod
-        distmod_unc = SNe_distmod_unc
+    def draw_mu(self, xmin, xmax, ymin, ymax, obs_redshift, obs_distmod, obs_distmod_unc):
         z   = self.z
         mu  = self.mu
         
@@ -591,7 +644,7 @@ class MDLS:
         ax  = fig.add_subplot(111)
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
-        plt.errorbar(redshift, distmod, yerr=distmod_unc, capsize=3, fmt='r.', label='Pantheon data')
+        plt.errorbar(obs_redshift, obs_distmod, yerr=obs_distmod_unc, capsize=3, fmt='r.', label='Pantheon data')
         plt.plot(z, mu, color='b',label=r'$\mu$')
         plt.xlabel('$z$')
         plt.ylabel(r'$\mu \, (z)$')
